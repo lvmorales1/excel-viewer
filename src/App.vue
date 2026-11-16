@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, markRaw } from 'vue'
 import * as XLSX from 'xlsx'
 
 const PREVIEW_ROWS = 200
@@ -32,17 +32,19 @@ function toObjects([header = [], ...rows]) {
   return rows.map(row => Object.fromEntries(keys.map((key, i) => [key, row[i]])))
 }
 
-const output = computed(() => {
+const rendered = computed(() => sheets.value.map(s => {
   if (format.value === 'json') {
-    return JSON.stringify(Object.fromEntries(sheets.value.map(s => [s.name, toObjects(s.rows)])), null, 2)
+    return `${JSON.stringify(s.name)}: ${JSON.stringify(toObjects(s.rows), null, 2).replaceAll('\n', '\n  ')}`
   }
-  if (format.value === 'markdown') {
-    return sheets.value.map(s => `## ${s.name}\n\n${toMarkdown(s.rows)}`).join('\n\n')
-  }
-  const body = sheets.value
-    .map(s => `<sheet name="${s.name}" rows="${s.rows.length}" cols="${s.rows[0]?.length ?? 0}">\n${toCsv(s.rows)}\n</sheet>`)
-    .join('\n')
-  return `<workbook name="${fileName.value}">\n${body}\n</workbook>`
+  if (format.value === 'markdown') return `## ${s.name}\n\n${toMarkdown(s.rows)}`
+  return `<sheet name="${s.name}" rows="${s.rows.length}" cols="${s.rows[0]?.length ?? 0}">\n${toCsv(s.rows)}\n</sheet>`
+}))
+
+const output = computed(() => {
+  const parts = rendered.value.filter((_, i) => sheets.value[i].included)
+  if (format.value === 'json') return parts.length ? `{\n  ${parts.join(',\n  ')}\n}` : '{}'
+  if (format.value === 'markdown') return parts.join('\n\n')
+  return `<workbook name="${fileName.value}">\n${parts.join('\n')}\n</workbook>`
 })
 
 async function copyOutput() {
@@ -58,7 +60,8 @@ async function load(file) {
     const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true })
     sheets.value = wb.SheetNames.map(name => ({
       name,
-      rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: false }),
+      included: true,
+      rows: markRaw(XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: false })),
     }))
     fileName.value = file.name
     active.value = 0
@@ -103,17 +106,22 @@ function onDrop(e) {
 
         <template v-if="current">
           <div class="flex gap-1 overflow-x-auto shrink-0">
-            <button
+            <div
               v-for="(sheet, i) in sheets"
               :key="sheet.name"
               @click="active = i"
               :class="[
-                'px-3 py-1 text-xs rounded border transition-colors whitespace-nowrap',
+                'flex items-center gap-2 px-3 py-1 text-xs rounded border transition-colors whitespace-nowrap cursor-pointer',
                 active === i
                   ? 'text-slate-200 border-[#3b4a6b] bg-[#1e2130]'
-                  : 'text-slate-500 border-transparent hover:text-slate-300'
+                  : 'text-slate-500 border-transparent hover:text-slate-300',
+                !sheet.included && 'opacity-50'
               ]"
-            >{{ sheet.name }} <span class="text-slate-600">{{ sheet.rows.length }}</span></button>
+            >
+              <input type="checkbox" v-model="sheet.included" @click.stop class="accent-slate-400" />
+              <span :class="!sheet.included && 'line-through'">{{ sheet.name }}</span>
+              <span class="text-slate-600">{{ sheet.rows.length }}</span>
+            </div>
           </div>
 
           <div class="flex-1 overflow-auto rounded-md border border-[#1e2130]">
