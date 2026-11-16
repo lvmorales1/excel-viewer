@@ -12,6 +12,8 @@ const error = ref('')
 const dragging = ref(false)
 const format = ref('xml')
 const copied = ref(false)
+const trim = ref(true)
+const limit = ref('')
 
 const current = computed(() => sheets.value[active.value])
 
@@ -32,12 +34,22 @@ function toObjects([header = [], ...rows]) {
   return rows.map(row => Object.fromEntries(keys.map((key, i) => [key, row[i]])))
 }
 
-const rendered = computed(() => sheets.value.map(s => {
-  if (format.value === 'json') {
-    return `${JSON.stringify(s.name)}: ${JSON.stringify(toObjects(s.rows), null, 2).replaceAll('\n', '\n  ')}`
+function clean(rows) {
+  if (trim.value) {
+    rows = rows.filter(row => row.some(cell => cell.trim()))
+    const used = rows[0]?.map((_, c) => rows.some(row => row[c]?.trim())) ?? []
+    rows = rows.map(row => row.filter((_, c) => used[c]))
   }
-  if (format.value === 'markdown') return `## ${s.name}\n\n${toMarkdown(s.rows)}`
-  return `<sheet name="${s.name}" rows="${s.rows.length}" cols="${s.rows[0]?.length ?? 0}">\n${toCsv(s.rows)}\n</sheet>`
+  return limit.value > 0 ? rows.slice(0, limit.value + 1) : rows
+}
+
+const rendered = computed(() => sheets.value.map(s => {
+  const rows = clean(s.rows)
+  if (format.value === 'json') {
+    return `${JSON.stringify(s.name)}: ${JSON.stringify(toObjects(rows), null, 2).replaceAll('\n', '\n  ')}`
+  }
+  if (format.value === 'markdown') return `## ${s.name}\n\n${toMarkdown(rows)}`
+  return `<sheet name="${s.name}" rows="${rows.length}" cols="${rows[0]?.length ?? 0}">\n${toCsv(rows)}\n</sheet>`
 }))
 
 const output = computed(() => {
@@ -143,25 +155,45 @@ function onDrop(e) {
       </section>
 
       <section class="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <div class="flex items-center justify-between px-4 pt-4 pb-2 border-b border-[#1e2130] shrink-0">
-          <div class="flex gap-1">
+        <div class="flex flex-col gap-2 px-4 pt-4 pb-2 border-b border-[#1e2130] shrink-0">
+          <div class="flex items-center justify-between">
+            <div class="flex gap-1">
+              <button
+                v-for="(label, key) in FORMATS"
+                :key="key"
+                @click="format = key"
+                :class="[
+                  'px-3 py-1 text-xs rounded border transition-colors',
+                  format === key
+                    ? 'text-slate-200 border-[#3b4a6b] bg-[#1e2130]'
+                    : 'text-slate-500 border-transparent hover:text-slate-300'
+                ]"
+              >{{ label }}</button>
+            </div>
             <button
-              v-for="(label, key) in FORMATS"
-              :key="key"
-              @click="format = key"
-              :class="[
-                'px-3 py-1 text-xs rounded border transition-colors',
-                format === key
-                  ? 'text-slate-200 border-[#3b4a6b] bg-[#1e2130]'
-                  : 'text-slate-500 border-transparent hover:text-slate-300'
-              ]"
-            >{{ label }}</button>
+              v-if="sheets.length"
+              @click="copyOutput"
+              :class="['px-3 py-1 text-xs rounded border transition-colors', copied ? 'text-green-300 border-green-300/25' : 'text-slate-400 border-[#2e3a50] bg-[#1e2130] hover:text-slate-200 hover:border-[#3b4a6b]']"
+            >{{ copied ? 'Copied' : 'Copy' }}</button>
           </div>
-          <button
-            v-if="sheets.length"
-            @click="copyOutput"
-            :class="['px-3 py-1 text-xs rounded border transition-colors', copied ? 'text-green-300 border-green-300/25' : 'text-slate-400 border-[#2e3a50] bg-[#1e2130] hover:text-slate-200 hover:border-[#3b4a6b]']"
-          >{{ copied ? 'Copied' : 'Copy' }}</button>
+
+          <div class="flex items-center gap-4 text-xs text-slate-500">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="trim" class="accent-slate-400" />
+              Trim empty rows and columns
+            </label>
+            <label class="flex items-center gap-2">
+              Row limit
+              <input
+                type="number"
+                min="1"
+                v-model.number="limit"
+                placeholder="all"
+                class="w-20 bg-[#141720] text-slate-300 border border-[#1e2130] rounded px-2 py-0.5 outline-none
+                      font-mono focus:border-[#3b4a6b] transition-colors placeholder:text-slate-600"
+              />
+            </label>
+          </div>
         </div>
 
         <div class="flex flex-1 p-4 overflow-hidden">
