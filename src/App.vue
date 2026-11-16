@@ -14,8 +14,43 @@ const format = ref('xml')
 const copied = ref(false)
 const trim = ref(true)
 const limit = ref('')
+const formulas = ref(false)
+const isoDates = ref(true)
+const fillMerged = ref(true)
+const compactJson = ref(false)
 
-const current = computed(() => sheets.value[active.value])
+function cellText(cell) {
+  if (!cell) return ''
+  if (formulas.value && cell.f) return `=${cell.f}`
+  if (isoDates.value && cell.t === 'd') {
+    const iso = cell.v.toISOString().slice(0, 19).replace('T', ' ')
+    return iso.endsWith(' 00:00:00') ? iso.slice(0, 10) : iso
+  }
+  return cell.w ?? String(cell.v ?? '')
+}
+
+function readRows(ws) {
+  if (!ws['!ref']) return []
+  const { s, e } = XLSX.utils.decode_range(ws['!ref'])
+  const rows = []
+  for (let r = s.r; r <= e.r; r++) {
+    const row = []
+    for (let c = s.c; c <= e.c; c++) row.push(cellText(ws[XLSX.utils.encode_cell({ r, c })]))
+    rows.push(row)
+  }
+  if (fillMerged.value) {
+    for (const m of ws['!merges'] ?? []) {
+      const value = rows[m.s.r - s.r][m.s.c - s.c]
+      for (let r = m.s.r; r <= m.e.r; r++) {
+        for (let c = m.s.c; c <= m.e.c; c++) rows[r - s.r][c - s.c] = value
+      }
+    }
+  }
+  return rows
+}
+
+const tables = computed(() => sheets.value.map(s => readRows(s.ws)))
+const preview = computed(() => tables.value[active.value] ?? [])
 
 function toCsv(rows) {
   return rows
@@ -43,10 +78,14 @@ function clean(rows) {
   return limit.value > 0 ? rows.slice(0, limit.value + 1) : rows
 }
 
-const rendered = computed(() => sheets.value.map(s => {
-  const rows = clean(s.rows)
+const rendered = computed(() => sheets.value.map((s, i) => {
+  const rows = clean(tables.value[i])
   if (format.value === 'json') {
-    return `${JSON.stringify(s.name)}: ${JSON.stringify(toObjects(rows), null, 2).replaceAll('\n', '\n  ')}`
+    const objects = toObjects(rows)
+    const json = compactJson.value
+      ? `[\n${objects.map(o => JSON.stringify(o)).join(',\n')}\n]`
+      : JSON.stringify(objects, null, 2)
+    return `${JSON.stringify(s.name)}: ${json.replaceAll('\n', '\n  ')}`
   }
   if (format.value === 'markdown') return `## ${s.name}\n\n${toMarkdown(rows)}`
   return `<sheet name="${s.name}" rows="${rows.length}" cols="${rows[0]?.length ?? 0}">\n${toCsv(rows)}\n</sheet>`
@@ -70,11 +109,7 @@ async function load(file) {
   error.value = ''
   try {
     const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true })
-    sheets.value = wb.SheetNames.map(name => ({
-      name,
-      included: true,
-      rows: markRaw(XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: false })),
-    }))
+    sheets.value = wb.SheetNames.map(name => ({ name, included: true, ws: markRaw(wb.Sheets[name]) }))
     fileName.value = file.name
     active.value = 0
   } catch (e) {
@@ -116,7 +151,7 @@ function onDrop(e) {
 
         <p v-if="error" class="text-xs text-red-400 font-mono">{{ error }}</p>
 
-        <template v-if="current">
+        <template v-if="sheets.length">
           <div class="flex gap-1 overflow-x-auto shrink-0">
             <div
               v-for="(sheet, i) in sheets"
@@ -132,15 +167,15 @@ function onDrop(e) {
             >
               <input type="checkbox" v-model="sheet.included" @click.stop class="accent-slate-400" />
               <span :class="!sheet.included && 'line-through'">{{ sheet.name }}</span>
-              <span class="text-slate-600">{{ sheet.rows.length }}</span>
+              <span class="text-slate-600">{{ tables[i].length }}</span>
             </div>
           </div>
 
           <div class="flex-1 overflow-auto rounded-md border border-[#1e2130]">
-            <p v-if="!current.rows.length" class="text-sm text-slate-600 p-4">This sheet is empty.</p>
+            <p v-if="!preview.length" class="text-sm text-slate-600 p-4">This sheet is empty.</p>
             <table v-else class="text-xs font-mono border-collapse">
               <tbody>
-                <tr v-for="(row, r) in current.rows.slice(0, PREVIEW_ROWS)" :key="r" class="even:bg-[#141720]">
+                <tr v-for="(row, r) in preview.slice(0, PREVIEW_ROWS)" :key="r" class="even:bg-[#141720]">
                   <td class="px-2 py-1 text-slate-600 text-right border-r border-[#1e2130] sticky left-0 bg-[#0f1117]">{{ r + 1 }}</td>
                   <td v-for="(cell, c) in row" :key="c" class="px-2 py-1 border-r border-[#1e2130] whitespace-nowrap max-w-xs truncate">{{ cell }}</td>
                 </tr>
@@ -148,8 +183,8 @@ function onDrop(e) {
             </table>
           </div>
 
-          <p v-if="current.rows.length > PREVIEW_ROWS" class="text-xs text-slate-600 shrink-0">
-            Showing {{ PREVIEW_ROWS }} of {{ current.rows.length }} rows
+          <p v-if="preview.length > PREVIEW_ROWS" class="text-xs text-slate-600 shrink-0">
+            Showing {{ PREVIEW_ROWS }} of {{ preview.length }} rows
           </p>
         </template>
       </section>
@@ -177,10 +212,26 @@ function onDrop(e) {
             >{{ copied ? 'Copied' : 'Copy' }}</button>
           </div>
 
-          <div class="flex items-center gap-4 text-xs text-slate-500">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
             <label class="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" v-model="trim" class="accent-slate-400" />
               Trim empty rows and columns
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="fillMerged" class="accent-slate-400" />
+              Fill merged cells
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="isoDates" class="accent-slate-400" />
+              ISO dates
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="formulas" class="accent-slate-400" />
+              Show formulas
+            </label>
+            <label v-if="format === 'json'" class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="compactJson" class="accent-slate-400" />
+              Compact JSON
             </label>
             <label class="flex items-center gap-2">
               Row limit
