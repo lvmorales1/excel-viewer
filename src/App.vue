@@ -3,8 +3,8 @@ import { ref, computed, markRaw } from 'vue'
 import * as XLSX from 'xlsx'
 
 const PREVIEW_ROWS = 200
-const FORMATS = { xml: 'XML + CSV', markdown: 'Markdown', json: 'JSON' }
-const EXTENSIONS = { xml: 'xml', markdown: 'md', json: 'json' }
+const FORMATS = { xml: 'XML + CSV', markdown: 'Markdown', json: 'JSON', schema: 'Schema' }
+const EXTENSIONS = { xml: 'xml', markdown: 'md', json: 'json', schema: 'md' }
 
 const fileName = ref('')
 const sheets = ref([])
@@ -70,6 +70,20 @@ function toObjects([header = [], ...rows]) {
   return rows.map(row => Object.fromEntries(keys.map((key, i) => [key, row[i]])))
 }
 
+function toSchema(name, [header = [], ...rows]) {
+  const columns = header.map((key, c) => {
+    const values = rows.map(row => row[c]).filter(v => v?.trim())
+    const distinct = [...new Set(values)]
+    const type = !values.length ? 'empty'
+      : values.every(v => /^-?[\d.,]+%?$/.test(v)) ? 'number'
+      : values.every(v => /^\d{4}-\d{2}-\d{2}|^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(v)) ? 'date'
+      : 'text'
+    const samples = distinct.slice(0, 3).map(v => JSON.stringify(v.slice(0, 40))).join(', ')
+    return `- ${key || XLSX.utils.encode_col(c)}: ${type}, ${values.length}/${rows.length} filled, ${distinct.length} distinct${samples && `, e.g. ${samples}`}`
+  })
+  return [`## ${name} (${rows.length} rows, ${header.length} columns)`, ...columns].join('\n')
+}
+
 function clean(rows) {
   if (trim.value) {
     rows = rows.filter(row => row.some(cell => cell.trim()))
@@ -89,13 +103,14 @@ const rendered = computed(() => sheets.value.map((s, i) => {
     return `${JSON.stringify(s.name)}: ${json.replaceAll('\n', '\n  ')}`
   }
   if (format.value === 'markdown') return `## ${s.name}\n\n${toMarkdown(rows)}`
+  if (format.value === 'schema') return toSchema(s.name, rows)
   return `<sheet name="${s.name}" rows="${rows.length}" cols="${rows[0]?.length ?? 0}">\n${toCsv(rows)}\n</sheet>`
 }))
 
 const output = computed(() => {
   const parts = rendered.value.filter((_, i) => sheets.value[i].included)
   if (format.value === 'json') return parts.length ? `{\n  ${parts.join(',\n  ')}\n}` : '{}'
-  if (format.value === 'markdown') return parts.join('\n\n')
+  if (format.value !== 'xml') return parts.join('\n\n')
   return `<workbook name="${fileName.value}">\n${parts.join('\n')}\n</workbook>`
 })
 
