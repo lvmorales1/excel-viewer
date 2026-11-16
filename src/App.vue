@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 
 const PREVIEW_ROWS = 200
 const FORMATS = { xml: 'XML + CSV', markdown: 'Markdown', json: 'JSON' }
+const EXTENSIONS = { xml: 'xml', markdown: 'md', json: 'json' }
 
 const fileName = ref('')
 const sheets = ref([])
@@ -102,6 +103,15 @@ async function copyOutput() {
   await navigator.clipboard.writeText(output.value)
   copied.value = true
   setTimeout(() => { copied.value = false }, 1800)
+}
+
+function downloadOutput() {
+  const url = URL.createObjectURL(new Blob([output.value], { type: 'text/plain' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${fileName.value.replace(/\.[^.]+$/, '')}.${EXTENSIONS[format.value]}`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function load(file) {
@@ -205,11 +215,13 @@ function onDrop(e) {
                 ]"
               >{{ label }}</button>
             </div>
-            <button
-              v-if="sheets.length"
-              @click="copyOutput"
-              :class="['px-3 py-1 text-xs rounded border transition-colors', copied ? 'text-green-300 border-green-300/25' : 'text-slate-400 border-[#2e3a50] bg-[#1e2130] hover:text-slate-200 hover:border-[#3b4a6b]']"
-            >{{ copied ? 'Copied' : 'Copy' }}</button>
+            <div v-if="sheets.length" class="flex gap-2">
+              <button @click="downloadOutput" class="px-3 py-1 text-xs rounded border transition-colors text-slate-400 border-[#2e3a50] bg-[#1e2130] hover:text-slate-200 hover:border-[#3b4a6b]">Download</button>
+              <button
+                @click="copyOutput"
+                :class="['px-3 py-1 text-xs rounded border transition-colors', copied ? 'text-green-300 border-green-300/25' : 'text-slate-400 border-[#2e3a50] bg-[#1e2130] hover:text-slate-200 hover:border-[#3b4a6b]']"
+              >{{ copied ? 'Copied' : 'Copy' }}</button>
+            </div>
           </div>
 
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
